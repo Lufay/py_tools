@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from bs4 import Tag
 import os
 import pprint
+import multiprocessing
 
 local_dir = './image'
 host = 'http://news.family.baidu.com/topicComments'
@@ -16,6 +17,9 @@ header = { 'User-Agent' : 'Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTM
 		'Accept-Language' : 'zh-CN,zh;q=0.8',
         'Cache-Control': 'max-age=0'
 }
+dheader = header.copy()
+dheader['Accept'] = 'image/webp,image/*,*/*;q=0.8'
+dheader['Referer'] = host
 
 def getPage(pageNum, pageSize=9):
 # if move req outside this function will encounter some exception: see main and processTotal
@@ -31,23 +35,32 @@ def getPage(pageNum, pageSize=9):
     res = urllib2.urlopen(req)
     return res.read()
 
-def download(url, timeout=30):
-    dheader = header.copy()
-    dheader['Accept'] = 'image/webp,image/*,*/*;q=0.8'
+def download(url, lock=None, timeout=60, retry=5):
     #dheader['Host'] = urlparse.urlparse(url).netloc
-    dheader['Referer'] = host
-    #print dheader
     req = urllib2.Request(url, headers=dheader)
-    res = urllib2.urlopen(req, timeout=timeout)
-    content = res.read()
-    if not os.path.isdir(local_dir):
-        os.mkdir(local_dir)
+    for i in xrange(1, retry):
+        try:
+            res = urllib2.urlopen(req, timeout=timeout)
+            content = res.read()
+            break
+        except Exception, e:
+            print 'download %s' % url
+            print e.message
+            print 'Retry %d' % i
+    else:
+        return
     filename = '%s/%s' % (local_dir, os.path.basename(url))
     suffix = 0
     basename, ext = os.path.splitext(filename)
+    if lock is not None:
+        lock.acquire()
+    if not os.path.isdir(local_dir):
+        os.mkdir(local_dir)
     while os.path.exists(filename):
         filename = '%s-%d%s' % (basename, suffix, ext)
         suffix += 1
+    if lock is not None:
+        lock.release()
     with open(filename, 'w') as f:
         f.write(content)
     res.close()
@@ -73,10 +86,10 @@ def to_string(tag):
             res.append(unicode(c))
     return ''.join(res)
 
-def multi_download(url):
-    pass
-
 def processPage(content):
+    pool = multiprocessing.Pool(processes=4)
+    #lock = multiprocessing.Lock()
+    lock = multiprocessing.Manager().Lock()
     soup = BeautifulSoup(content, 'lxml')
     div_list = soup.find('div', class_='list')
     result = []
@@ -91,7 +104,7 @@ def processPage(content):
         res['hi_link'] = unicode(item.find('a', class_='hi'))
         comment_div = item.find('div', class_='content')
         res['comment'] = comment_div.children.next().strip()
-        t = lambda url: (url, download(url))
+        t = lambda url: [url, pool.apply_async(download, (url, lock))]
         res['imgs'] = [t(img_div.img['src']) for img_div in comment_div.find('div', class_='imgList').find_all('div', class_='imgItem')]
         count_p = item.find('p', class_='replySupport')
         res['support_count'] = int(count_p.find('span', class_='supportComment').em.string)
@@ -101,6 +114,12 @@ def processPage(content):
                 + to_string(rdiv.find('div', class_='rContent'))
                 for rdiv in reply_divs]
         result.append(res)
+    pool.close()
+    pool.join()
+    for item in result:
+        for img in item['imgs']:
+            res = img[1]
+            img[1] = res.get()
     return result
 
 
