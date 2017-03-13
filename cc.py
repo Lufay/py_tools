@@ -5,9 +5,11 @@ import urllib2, urllib
 #import urlparse
 from bs4 import BeautifulSoup
 from bs4 import Tag
+from bs4 import NavigableString
 import os
 import pprint
 import multiprocessing
+from PIL import Image
 
 local_dir = './image'
 host = 'http://news.family.baidu.com/topicComments'
@@ -82,8 +84,8 @@ def to_string(tag):
     for c in tag.children:
         if isinstance(c, Tag) and c.name == u'br':
             res.append(u'\n')
-        else:
-            res.append(unicode(c))
+        elif isinstance(c, NavigableString):
+            res.append(unicode(c).strip())
     return ''.join(res)
 
 def processPage(content):
@@ -103,7 +105,7 @@ def processPage(content):
         res['uname'] = unicode(info.string)
         res['hi_link'] = unicode(item.find('a', class_='hi'))
         comment_div = item.find('div', class_='content')
-        res['comment'] = comment_div.children.next().strip()
+        res['comment'] = to_string(comment_div)
         t = lambda url: [url, pool.apply_async(download, (url, lock))]
         res['imgs'] = [t(img_div.img['src']) for img_div in comment_div.find('div', class_='imgList').find_all('div', class_='imgItem')]
         count_p = item.find('p', class_='replySupport')
@@ -141,9 +143,78 @@ def processTotal():
     content = getPage(1, tnum)
     return processPage(content)
 
+def add_content(parent, cont, soup):
+    br = None
+    for seg in cont.splitlines():
+        if len(seg) > 0:
+            parent.append(soup.new_string(seg))
+            br = soup.new_tag('br')
+            parent.append(br)
+    if br is not None:
+        br.decompose()
+
+def genHtml(result, soup=None):
+    if soup is None:
+        soup = BeautifulSoup('<div class="content"></div>', 'lxml')
+    if isinstance(result, dict):
+        div = soup.new_tag('div', class_='item')
+        div1 = soup.new_tag('div')
+
+        floor = soup.new_tag('span', class_='floor')
+        floor.append(result['floor'])
+        div1.append(floor)
+
+        name = soup.new_tag('span', class_='name')
+        a = BeautifulSoup(result['hi_link'], 'lxml').a
+        a.append(result['uname'])
+        name.append(a)
+        if 'dept' in result:
+            name.append(u'(%s)' % result['dept'])
+        div1.append(name)
+
+        support_count = soup.new_tag('span', class_='support')
+        support_count.append(u'%d 支持' % result['support_count'])
+        div1.append(support_count)
+        div.append(div1)
+
+        div_comment = soup.new_tag('div', class_='comment')
+        add_content(div_comment, result['comment'], soup)
+        div.append(div_comment)
+
+        div_img = soup.new_tag('div', class_='image')
+        for img in result['imgs']:
+            imgUrl = img[1]
+            if imgUrl is not None:
+                imgObj = Image.open(imgUrl)
+                w, h = imgObj.size
+                w = w * 600 / h
+                h = 600
+                div_img.append(soup.new_tag('img', src=imgUrl, width=w, height=h))
+        div.append(div_img)
+
+        div_replys = soup.new_tag('div', class_='replys')
+        div_replys.append(u'%d 条回复:' % result['reply_count'])
+        for reply in result['replys']:
+            div_reply = soup.new_tag('div')
+            add_content(div_reply, reply, soup)
+            div_replys.append(div_reply)
+        div.append(div_replys)
+    elif isinstance(result, (list, tuple)):
+        div = soup.new_tag('div', class_='list')
+        for item in result:
+            div.append(genHtml(item)[0])
+    return div, soup
 
 if __name__ == '__main__':
     #processNPage()
     #print processPage(getFloor(907))
+    obj = processTotal()
     with open('out', 'w') as f:
-        pprint.pprint(processTotal(), f)
+        pprint.pprint(obj, f)
+
+    obj.sort(key=lambda x: x['support_count'], reverse=True)
+    with open('out.html', 'w') as f:
+        div, soup = genHtml(obj)
+        soup.div.append(div)
+        f.write(soup.prettify(encoding='utf-8'))
+
