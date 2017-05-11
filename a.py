@@ -10,6 +10,7 @@ import json
 import pprint
 #from PIL import Image
 import subprocess
+import random
 
 host='https://wx.qq.com'
 host2='https://login.wx.qq.com'
@@ -24,7 +25,7 @@ header_json.update({
     'Accept': 'application/json,text/plain,*/*',
     'Content-Type': 'application/json;charset=UTF-8'
 })
-device_id = 'e950762158418137'
+device_id = 'e' + str(random.random())[2:17]
 contact_dict = {}
 sex_map = {0: u'未知', 1: u'男', 2: u'女'}
 
@@ -101,9 +102,9 @@ def genTokenPack(func):
     def call_func(wxuin, wxsid, skey, pass_ticket=None, *args, **kwargs):
         data = {
             'BaseRequest': {
-                'Uin': wxuin,
-                'Sid': wxsid,
-                'Skey': skey,
+                'Uin': wxuin,   # weixin user identity number
+                'Sid': wxsid,   # weixin session id
+                'Skey': skey,   # one-time password
                 'DeviceID': device_id
             }
         }
@@ -132,6 +133,9 @@ def getInfo(token_pack, pass_ticket):
 
 @genTokenPack
 def statusNotify(token_pack, pass_ticket, my_name):
+    '''
+    通知手机端更新状态
+    '''
     uri = '%s/cgi-bin/mmwebwx-bin/webwxstatusnotify' % host
     arg = {
         'lang': 'zh_CN',
@@ -170,9 +174,9 @@ def getContact(pass_ticket, skey):
     else:
         return res['MemberList']
 
-def extractContactDict(contacts):
+def extractContactDict(contacts, ignore_conflict=False):
     for c in contacts:
-        if c['UserName'] in contact_dict:
+        if not ignore_conflict and c['UserName'] in contact_dict:
             print 'user_id %s conflict!' % c['UserName']
             sys.exit(1)
         else:
@@ -233,7 +237,7 @@ def syncMsg(token_pack, sync_key):
     if res['BaseResponse']['Ret'] != 0:
         print res['BaseResponse']['ErrMsg']
     else:
-        return res['AddMsgList'], res['SyncKey']
+        return res['AddMsgList'], res['SyncKey'], res['ModContactList'], res['DelContactList']
 
 def showMsg(msg_list):
     for msg in msg_list:
@@ -257,7 +261,7 @@ def main():
     showQrCode(uuid)
     red_uri, host = loginDetect(uuid)   # modify host
     url = '%s&fun=new&version=v2' % red_uri
-    ret = parseXML(request(url))
+    ret = parseXML(request(url))    # set-cookies
     user, sync_key = getInfo(ret['wxuin'], ret['wxsid'], ret['skey'], ret['pass_ticket'])
     statusNotify(ret['wxuin'], ret['wxsid'], ret['skey'], ret['pass_ticket'], user['UserName'])
     contacts = getContact(ret['pass_ticket'], ret['skey'])
@@ -267,10 +271,11 @@ def main():
     contact_dict = extractContactDict(contacts)
     while True:
         s = syncCheck(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key)
-        if s == 2 or s == 1:
-            add_msg_list, sync_key = syncMsg(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key=sync_key)
+        if s == 2 or s == 1 or s == 4:
+            add_msg_list, sync_key, mod_contacts, del_contacts = syncMsg(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key=sync_key)
             showMsg(add_msg_list)
-        else:
+            extractContactDict(mod_contacts, True)
+        elif s != 0:
             break
 
 if __name__ == '__main__':
