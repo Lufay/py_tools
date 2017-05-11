@@ -6,6 +6,7 @@ import time
 import re
 from lxml import etree
 import json
+import pprint
 #from PIL import Image
 import subprocess
 
@@ -23,7 +24,6 @@ header_json.update({
     'Content-Type': 'application/json;charset=UTF-8'
 })
 device_id = 'e950762158418137'
-rr_total_timestamp = 1494648619171
 
 def installCookieOpener():
     cookie = cookielib.CookieJar()
@@ -61,19 +61,25 @@ def showQrCode(uuid):
     #im.show()
     subprocess.check_call('imgcat qrcode', shell=True)
 
-def loginDetect(uuid, uuid_time=None):
+def bitNot(num, width=32):
+    t = 2 ** width
+    return t + ~(num % t)
+
+def loginDetect(uuid, uuid_time=None, retry=10):
     detect_uri = '%s/cgi-bin/mmwebwx-bin/login' % host2
+    now = int(time.time() * 1000)
     arg = {
         'loginicon': 'true',
         'uuid': uuid,
         'tip': 0,
-        'r': 1010561045,
-        '_': int(time.time() * 1000) if uuid_time is None else uuid_time
+        'r': bitNot(now),
+        '_': now if uuid_time is None else uuid_time
     }
     pattern = re.compile(r'''window.code=200;
 window.redirect_uri="((https://wx\d*.qq.com)/cgi-bin/mmwebwx-bin/webwxnewloginpage.*)";''')
-    for _ in xrange(10):
+    for _ in xrange(retry):
         arg['_'] += 1
+        arg['r'] = bitNot(int(time.time() * 1000))
         url = '%s?%s' % (detect_uri, urllib.urlencode(arg))
         res = request(url)
         print `res`
@@ -108,7 +114,7 @@ def genTokenPack(func):
 def getInfo(token_pack, pass_ticket):
     uri = '%s/cgi-bin/mmwebwx-bin/webwxinit' % host
     arg = {
-        'r': 991828414,
+        'r': bitNot(int(time.time() * 1000)),
         'lang': 'zh_CN',
         'pass_ticket': pass_ticket
     }
@@ -200,7 +206,7 @@ def syncMsg(token_pack, sync_key):
     }
     url = '%s?%s' % (uri, urllib.urlencode(arg))
     token_pack['SyncKey'] = sync_key
-    token_pack['rr'] = rr_total_timestamp - int(time.time() * 1000)
+    token_pack['rr'] = bitNot(int(time.time() * 1000))
     ret = request(url, json.dumps(token_pack), header_json)
     #print ret
     res = json.loads(ret)
@@ -209,7 +215,7 @@ def syncMsg(token_pack, sync_key):
     else:
         return res['AddMsgList'], res['SyncKey']
 
-if __name__ == '__main__':
+def main():
     installCookieOpener()
     uuid = getUUID()
     if uuid == None:
@@ -223,6 +229,9 @@ if __name__ == '__main__':
     #getContact(ret['pass_ticket'], ret['skey'])
     while True:
         s = syncCheck(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key)
-        if s == 2:
+        if s == 2 or s == 1:
             add_msg_list, sync_key = syncMsg(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key=sync_key)
-            print add_msg_list
+            pprint.pprint(add_msg_list)
+
+if __name__ == '__main__':
+    main()
