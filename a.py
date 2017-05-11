@@ -1,8 +1,9 @@
 #!/usr/bin/env python
+# -*- coding:utf-8 -*-
 
 import sys
 import urllib2, urllib, cookielib
-import time
+import time, datetime
 import re
 from lxml import etree
 import json
@@ -24,6 +25,8 @@ header_json.update({
     'Content-Type': 'application/json;charset=UTF-8'
 })
 device_id = 'e950762158418137'
+contact_dict = {}
+sex_map = {0: u'未知', 1: u'男', 2: u'女'}
 
 def installCookieOpener():
     cookie = cookielib.CookieJar()
@@ -120,7 +123,7 @@ def getInfo(token_pack, pass_ticket):
     }
     url = '%s?%s' % (uri, urllib.urlencode(arg))
     res = request(url, json.dumps(token_pack), header_json)
-    print `res`
+    #print `res`
     info = json.loads(res)
     if info['BaseResponse']['Ret'] != 0:
         print info['BaseResponse']['ErrMsg']
@@ -160,8 +163,25 @@ def getContact(pass_ticket, skey):
         'pass_ticket': pass_ticket
     }
     url = '%s?%s' % (uri, urllib.urlencode(arg))
-    res = request(url, headers=header_json)
-    print res
+    ret = request(url, headers=header_json)
+    res = json.loads(ret)
+    if res['BaseResponse']['Ret'] != 0:
+        print res['BaseResponse']['ErrMsg']
+    else:
+        return res['MemberList']
+
+def extractContactDict(contacts):
+    for c in contacts:
+        if c['UserName'] in contact_dict:
+            print 'user_id %s conflict!' % c['UserName']
+            sys.exit(1)
+        else:
+            contact_dict[c['UserName']] = {
+                'NickName': c['NickName'],
+                'RemarkName': c['RemarkName'],
+                'Signature': c['Signature'],
+                'Sex': sex_map[c['Sex']]
+            }
 
 def formatSyncKey(sync_key_dict):
     '''
@@ -215,23 +235,43 @@ def syncMsg(token_pack, sync_key):
     else:
         return res['AddMsgList'], res['SyncKey']
 
+def showMsg(msg_list):
+    for msg in msg_list:
+        recv_time = datetime.datetime.fromtimestamp(msg['CreateTime'])
+        from_user = contact_dict[msg['FromUserName']]
+        to_user = contact_dict[msg['ToUserName']]
+        content = msg['Content']
+        print u'''%s
+%s 发给 %s :
+%s
+''' % (recv_time,
+        from_user['NickName'] if len(from_user['RemarkName']) == 0 else from_user['RemarkName'],
+        to_user['NickName'] if len(from_user['RemarkName']) == 0 else from_user['RemarkName'],
+        content)
+
 def main():
     installCookieOpener()
     uuid = getUUID()
-    if uuid == None:
+    if uuid is None:
         sys.exit(1)
     showQrCode(uuid)
     red_uri, host = loginDetect(uuid)   # modify host
     url = '%s&fun=new&version=v2' % red_uri
     ret = parseXML(request(url))
     user, sync_key = getInfo(ret['wxuin'], ret['wxsid'], ret['skey'], ret['pass_ticket'])
-    #statusNotify(ret['wxuin'], ret['wxsid'], ret['skey'], ret['pass_ticket'], user['UserName'])
-    #getContact(ret['pass_ticket'], ret['skey'])
+    statusNotify(ret['wxuin'], ret['wxsid'], ret['skey'], ret['pass_ticket'], user['UserName'])
+    contacts = getContact(ret['pass_ticket'], ret['skey'])
+    if contacts is None:
+        sys.exit(2)
+    contacts.append(user)
+    contact_dict = extractContactDict(contacts)
     while True:
         s = syncCheck(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key)
         if s == 2 or s == 1:
             add_msg_list, sync_key = syncMsg(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key=sync_key)
-            pprint.pprint(add_msg_list)
+            showMsg(add_msg_list)
+        else:
+            break
 
 if __name__ == '__main__':
     main()
