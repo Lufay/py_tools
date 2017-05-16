@@ -11,6 +11,7 @@ import pprint
 #from PIL import Image
 import subprocess
 import random
+import functools
 
 host='https://wx.qq.com'
 host2='https://login.wx.qq.com'
@@ -129,7 +130,7 @@ def getInfo(token_pack, pass_ticket):
     if info['BaseResponse']['Ret'] != 0:
         print info['BaseResponse']['ErrMsg']
     else:
-        return info['User'], info['SyncKey']
+        return info['User'], info['SyncKey'], info['ChatSet']
 
 @genTokenPack
 def statusNotify(token_pack, pass_ticket, my_name):
@@ -174,18 +175,49 @@ def getContact(pass_ticket, skey):
     else:
         return res['MemberList']
 
-def extractContactDict(contacts, ignore_conflict=False):
+@genTokenPack
+def getContactByUserName(token_pack, users_name):
+    if len(users_name) == 0:
+        return []
+    uri = '%s/cgi-bin/mmwebwx-bin/webwxbatchgetcontact' % host
+    arg = {
+        'type': 'ex',
+        'r': int(time.time() * 1000),
+        'lang': 'zh_CN'
+    }
+    url = '%s?%s' % (uri, urllib.urlencode(arg))
+    token_pack['Count'] = len(users_name)
+    token_pack['List'] = []
+    for user_name in users_name:
+        if len(user_name) > 0:
+            token_pack['List'].append({
+                'UserName': user_name,
+                'EncryChatRoomId': ""
+            })
+    ret = request(url, json.dumps(token_pack), header_json)
+    res = json.loads(ret)
+    if res['BaseResponse']['Ret'] != 0:
+        print res['BaseResponse']['ErrMsg']
+    else:
+        return res['ContactList']
+
+def storeContactDict(contacts):
     for c in contacts:
-        if not ignore_conflict and c['UserName'] in contact_dict:
-            print 'user_id %s conflict!' % c['UserName']
-            sys.exit(1)
-        else:
-            contact_dict[c['UserName']] = {
-                'NickName': c['NickName'],
-                'RemarkName': c['RemarkName'],
-                'Signature': c['Signature'],
-                'Sex': sex_map[c['Sex']]
-            }
+        mem_dict = {}
+        if 'MemberCount' in c and c['MemberCount'] > 0:
+            for m in c['MemberList']:
+                mem_dict[m['UserName']] = {
+                    'NickName': m['NickName'],
+                    'DisplayName': m['DisplayName'],
+                }
+        contact_dict[c['UserName']] = {
+            'NickName': c['NickName'],
+            'RemarkName': c['RemarkName'],
+            'Signature': c['Signature'],
+            'Sex': sex_map[c['Sex']],
+            'Members': mem_dict,
+            'EncryChatRoomId': c['EncryChatRoomId'] if 'EncryChatRoomId' in c else "0"
+        }
 
 def formatSyncKey(sync_key_dict):
     '''
@@ -217,6 +249,12 @@ def syncCheck(wxuin, wxsid, skey, sync_key):
             return int(mat.group(2))
         elif retcode == 1101:
             sys.exit(0)
+        else:
+            print 'Unknown retcode %d' % retcode
+            sys.exit(1)
+    else:
+        print 'No match the pattern!'
+        sys.exit(1)
 
 @genTokenPack
 def syncMsg(token_pack, sync_key):
@@ -239,19 +277,26 @@ def syncMsg(token_pack, sync_key):
     else:
         return res['AddMsgList'], res['SyncKey'], res['ModContactList'], res['DelContactList']
 
-def showMsg(msg_list):
+def showMsg(msg_list, process_pre_msg=lambda x:None):
     for msg in msg_list:
+        process_pre_msg(msg)
         recv_time = datetime.datetime.fromtimestamp(msg['CreateTime'])
         from_user = contact_dict[msg['FromUserName']]
         to_user = contact_dict[msg['ToUserName']]
         content = msg['Content']
+        if msg['FromUserName'].startswith('@@') and content.startswith('@'):
+            index = content.find(':')
+            if index >= 0:
+                from_group_username = content[:index]
+                from_group_user = from_user['Members'][from_group_username]
+                content = content.replace(from_group_username, from_group_user['NickName'] if len(from_group_user['DisplayName']) == 0 else from_group_user['DisplayName'], 1)
         print u'''%s
 %s 发给 %s :
 %s
 ''' % (recv_time,
         from_user['NickName'] if len(from_user['RemarkName']) == 0 else from_user['RemarkName'],
         to_user['NickName'] if len(from_user['RemarkName']) == 0 else from_user['RemarkName'],
-        content)
+        content.replace('<br/>', '\n').replace('&lt;', '<').replace('&gt;', '>'))
 
 def main():
     installCookieOpener()
@@ -262,19 +307,28 @@ def main():
     red_uri, host = loginDetect(uuid)   # modify host
     url = '%s&fun=new&version=v2' % red_uri
     ret = parseXML(request(url))    # set-cookies
-    user, sync_key = getInfo(ret['wxuin'], ret['wxsid'], ret['skey'], ret['pass_ticket'])
+    user, sync_key, chatSet = getInfo(ret['wxuin'], ret['wxsid'], ret['skey'], ret['pass_ticket'])
     statusNotify(ret['wxuin'], ret['wxsid'], ret['skey'], ret['pass_ticket'], user['UserName'])
     contacts = getContact(ret['pass_ticket'], ret['skey'])
     if contacts is None:
         sys.exit(2)
     contacts.append(user)
-    contact_dict = extractContactDict(contacts)
+    storeContactDict(contacts)
+
+    getContactByUserNames = functools.partial(getContactByUserName, ret['wxuin'], ret['wxsid'], ret['skey'], None)
+    def addGroup(users_name):
+        group = getContactByUserNames([g for g in users_name.split(',') if g.startswith('@@')])
+        if group is None:
+            sys.exit(3)
+        storeContactDict(group)
+
+    addGroup(chatSet)
     while True:
         s = syncCheck(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key)
         if s == 2 or s == 1 or s == 4:
             add_msg_list, sync_key, mod_contacts, del_contacts = syncMsg(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key=sync_key)
-            showMsg(add_msg_list)
-            extractContactDict(mod_contacts, True)
+            showMsg(add_msg_list, lambda msg: addGroup(msg['StatusNotifyUserName']))
+            storeContactDict(mod_contacts)
         elif s != 0:
             break
 
