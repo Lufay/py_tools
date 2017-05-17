@@ -17,7 +17,7 @@ host='https://wx.qq.com'
 host2='https://login.wx.qq.com'
 header = { 'User-Agent' : 'Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/31.0.1650.63 Safari/537.36',
 		'Connection' : 'keep-alive',
-		'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+		'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/*,*/*;q=0.8',
 		'Accept-Language' : 'zh-CN,zh;q=0.8',
         'Cache-Control': 'max-age=0'
 }
@@ -277,26 +277,45 @@ def syncMsg(token_pack, sync_key):
     else:
         return res['AddMsgList'], res['SyncKey'], res['ModContactList'], res['DelContactList']
 
-def showMsg(msg_list, process_pre_msg=lambda x:None):
+
+def showMsg(msg_list, process_pre_msg=None, process_post_msg=None):
     for msg in msg_list:
-        process_pre_msg(msg)
+        if hasattr(process_pre_msg, '__call__'):
+            process_pre_msg(msg)
         recv_time = datetime.datetime.fromtimestamp(msg['CreateTime'])
         from_user = contact_dict[msg['FromUserName']]
         to_user = contact_dict[msg['ToUserName']]
-        content = msg['Content']
+        real_content = content = msg['Content'].replace('<br/>', '\n').replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
         if msg['FromUserName'].startswith('@@') and content.startswith('@'):
             index = content.find(':')
             if index >= 0:
                 from_group_username = content[:index]
                 from_group_user = from_user['Members'][from_group_username]
+                real_content = content[index+1:]
                 content = content.replace(from_group_username, from_group_user['NickName'] if len(from_group_user['DisplayName']) == 0 else from_group_user['DisplayName'], 1)
+        msg['Content'] = real_content
         print u'''%s
 %s 发给 %s :
 %s
 ''' % (recv_time,
         from_user['NickName'] if len(from_user['RemarkName']) == 0 else from_user['RemarkName'],
         to_user['NickName'] if len(from_user['RemarkName']) == 0 else from_user['RemarkName'],
-        content.replace('<br/>', '\n').replace('&lt;', '<').replace('&gt;', '>'))
+        content)
+        if hasattr(process_post_msg, '__call__'):
+            process_post_msg(msg)
+
+def showMsgImg(skey, msg_id, img_type):
+    uri = '%s/cgi-bin/mmwebwx-bin/webwxgetmsgimg' % host
+    arg = {
+        'MsgID': msg_id,
+        'skey': skey,
+        'type': img_type
+    }
+    url = '%s?%s' % (uri, urllib.urlencode(arg))
+    with open('%s.png' % msg_id, 'w') as f:
+        f.write(request(url))
+    subprocess.check_call('imgcat %s.png' % msg_id, shell=True)
+
 
 def main():
     installCookieOpener()
@@ -323,11 +342,20 @@ def main():
         storeContactDict(group)
 
     addGroup(chatSet)
+    def do_post_msg(msg):
+        try:
+            root = etree.XML(msg['Content'])
+            for tag in root:
+                if tag.tag == 'emoji':
+                    showMsgImg(ret['skey'], msg['MsgId'], 'big')
+        except etree.XMLSyntaxError, e:
+            pass
+
     while True:
         s = syncCheck(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key)
         if s == 2 or s == 1 or s == 4:
             add_msg_list, sync_key, mod_contacts, del_contacts = syncMsg(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key=sync_key)
-            showMsg(add_msg_list, lambda msg: addGroup(msg['StatusNotifyUserName']))
+            showMsg(add_msg_list, lambda msg: addGroup(msg['StatusNotifyUserName']), do_post_msg)
             storeContactDict(mod_contacts)
         elif s != 0:
             break
