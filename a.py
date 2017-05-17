@@ -354,7 +354,16 @@ def main():
     while True:
         s = syncCheck(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key)
         if s == 2 or s == 1 or s == 4:
-            add_msg_list, sync_key, mod_contacts, del_contacts = syncMsg(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key=sync_key)
+            for retry in xrange(5):
+                sync_res = syncMsg(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key=sync_key)
+                if sync_res is None:
+                    print 'retry sync msg %d' % retry
+                else:
+                    break
+            else:
+                print 'retry sync msg failed!'
+                sys.exit(5)
+            add_msg_list, sync_key, mod_contacts, del_contacts = sync_res
             showMsg(add_msg_list, lambda msg: addGroup(msg['StatusNotifyUserName']), do_post_msg)
             storeContactDict(mod_contacts)
         elif s != 0:
