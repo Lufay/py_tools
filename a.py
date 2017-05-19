@@ -2,7 +2,7 @@
 # -*- coding:utf-8 -*-
 
 import sys
-import urllib2, urllib, cookielib
+import urllib2, urllib, cookielib, httplib
 import time, datetime
 import re
 from lxml import etree
@@ -27,7 +27,16 @@ header_json.update({
     'Content-Type': 'application/json;charset=UTF-8'
 })
 device_id = 'e' + str(random.random())[2:17]
-contact_dict = {}
+contact_dict = {
+    'newsapp': {
+        'NickName': u'腾讯新闻',
+        'RemarkName': u'',
+        'Signature': u'',
+        'Sex': 0,
+        'Members': {},
+        'EncryChatRoomId': u''
+    }
+}
 sex_map = {0: u'未知', 1: u'男', 2: u'女'}
 
 def installCookieOpener():
@@ -35,10 +44,23 @@ def installCookieOpener():
     opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cookie))
     urllib2.install_opener(opener)
 
-def request(url, data=None, headers=None):
+def request(url, data=None, headers=None, retry=5):
     req = urllib2.Request(url, data, headers=header if headers is None else headers)
-    res = urllib2.urlopen(req)
-    return res.read()
+    for _ in xrange(retry):
+        try:
+            res = urllib2.urlopen(req)
+            return res.read()
+        except urllib2.HTTPError, e:
+            print "Caght a HTTP except!\n%s" % e.reason
+        except urllib2.URLError, e:
+            print "Caght a URL except!\n%s" % e
+        except httplib.BadStatusLine, e:
+            print "Caght a BadStatusLine except!\n%s" % e
+        except Exception, e:
+            print "Caght a unknown except!\n%s" % e.message
+        time.sleep(_ + 1)
+    else:
+        print "Retry failed!"
 
 def getUUID():
     red_uri = '%s/cgi-bin/mmwebwx-bin/webwxnewloginpage' % host
@@ -299,7 +321,7 @@ def showMsg(msg_list, process_pre_msg=None, process_post_msg=None):
 %s
 ''' % (recv_time,
         from_user['NickName'] if len(from_user['RemarkName']) == 0 else from_user['RemarkName'],
-        to_user['NickName'] if len(from_user['RemarkName']) == 0 else from_user['RemarkName'],
+        to_user['NickName'] if len(to_user['RemarkName']) == 0 else to_user['RemarkName'],
         content)
         if hasattr(process_post_msg, '__call__'):
             process_post_msg(msg)
