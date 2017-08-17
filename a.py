@@ -44,7 +44,7 @@ def installCookieOpener():
     opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cookie))
     urllib2.install_opener(opener)
 
-def request(url, data=None, headers=None, retry=5):
+def request(url, data=None, headers=None, retry=10):
     req = urllib2.Request(url, data, headers=header if headers is None else headers)
     for _ in xrange(retry):
         try:
@@ -338,6 +338,61 @@ def showMsgImg(skey, msg_id, img_type):
         f.write(request(url))
     subprocess.check_call('imgcat %s.png' % msg_id, shell=True)
 
+@genTokenPack
+def sendMsg(token_pack, pass_ticket, content, from_user, to_user):
+    uri = '%s/cgi-bin/mmwebwx-bin/webwxsendmsg' % host
+    arg = {
+        'pass_ticket': pass_ticket
+    }
+    url = '%s?%s' % (uri, urllib.urlencode(arg))
+    local_id = '%d0&d' % (time.time() * 1000, random.random() * 1000)
+    token_pack.update({
+        'Scene': 0,
+        'Msg': {
+            'ClientMsgId': local_id,
+            'Content': content,
+            'FromUserName': from_user,
+            'ToUserName': to_user,
+            'LocalID': local_id,
+            'Type': 1       # 1: text; 3: image
+        }
+    })
+    ret = request(url, json.dumps(token_pack), header_json)
+    res = json.loads(ret)
+    if res['BaseResponse']['Ret'] != 0:
+        print res['BaseResponse']['ErrMsg']
+    else:
+        return res['MsgID']
+
+@genTokenPack
+def sendImg(token_pack, pass_ticket, media_id, from_user, to_user):
+    uri = '%s/cgi-bin/mmwebwx-bin/webwxsendmsgimg' % host
+    arg = {
+        'pass_ticket': pass_ticket,
+        'fun': 'async',
+        'f': 'json'
+    }
+    url = '%s?%s' % (uri, urllib.urlencode(arg))
+    local_id = '%d0&d' % (time.time() * 1000, random.random() * 1000)
+    token_pack.update({
+        'Scene': 0,
+        'Msg': {
+            'ClientMsgId': local_id,
+            'Content': '',
+            'FromUserName': from_user,
+            'ToUserName': to_user,
+            'LocalID': local_id,
+            'MediaId': media_id,
+            'Type': 3       # 1: text; 3: image
+        }
+    })
+    ret = request(url, json.dumps(token_pack), header_json)
+    res = json.loads(ret)
+    if res['BaseResponse']['Ret'] != 0:
+        print res['BaseResponse']['ErrMsg']
+    else:
+        return res['MsgID']
+
 
 def main():
     installCookieOpener()
@@ -373,9 +428,12 @@ def main():
         except etree.XMLSyntaxError, e:
             pass
 
+    sendFileHelper = functools.partial(sendMsg, ret['wxuin'], ret['wxsid'], ret['skey'], ret['pass_ticket'], to_user='filehelper')
+    sendFileHelper('成功', user['UserName'])
+    return
     while True:
         s = syncCheck(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key)
-        if s == 2 or s == 1 or s == 4:
+        if s in (2, 1, 4):
             for retry in xrange(5):
                 sync_res = syncMsg(ret['wxuin'], ret['wxsid'], ret['skey'], sync_key=sync_key)
                 if sync_res is None:
