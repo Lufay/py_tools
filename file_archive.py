@@ -91,7 +91,7 @@ class FileMd5:
         else:
             print(f'{file} not in {self.file.parent}!')
 
-    def move_in(self, file, new_file_name, md5=None):
+    def move_in(self, file:Path, new_file_name, md5=None):
         try:
             new_file = file.replace(self.file.parent/new_file_name)
         except OSError:
@@ -129,27 +129,40 @@ class FileMd5:
             except StopIteration:
                 print(f'{name} not in {path}')
 
-async def get_input(latest_path=None):
-    p = input('path: ')
-    if not p and latest_path:
-        p = latest_path
-    if Path(p).exists():
-        name = input('name: ')
-        if set(name) & set('?*'):
-            name = None
-        return p, name
-    else:
-        print(f'{p} not exists')
+async def get_input(default_path=None):
+    while True:
+        p = input('path: ')
+        if not p and default_path:
+            p = default_path
+        path = Path(p)
+        if path.is_dir():
+            name = input('name: ').strip()
+            if name.startswith(':'):
+                name = name[1:].strip()
+                if name == 'all':
+                    gen = path.iterdir()
+                elif name.startswith('p'):
+                    gen = path.rglob(name[1:])
+                else:
+                    print(f'bad command {name}')
+                    break
+                for f in gen:
+                    if f.is_file() and not f.name.startswith('.') and input(f'{f} y/n:') != 'n':
+                        yield path, f.name
+            else:
+                yield path, None if set(name) & set('*?') else name
+            default_path = p
+        elif path.is_file():
+            yield path.parent, path.name
+            default_path = path.parent
+        else:
+            print(f'{p} not exists')
+            break
 
 async def producer(q: asyncio.Queue):
-    p = None
-    while True:
-        pn = await get_input(p)
-        if len(pn) != 2:
-            break
+    async for pn in get_input():
         q.put_nowait(pn)
         await asyncio.sleep(0)
-        p = pn[0]
 
 async def worker(fm:FileMd5, q: asyncio.Queue):
     while True:
